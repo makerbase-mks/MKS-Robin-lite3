@@ -57,13 +57,14 @@ void BootScreen::onIdle() {
     // in case the display is borked.
     InterfaceSettingsScreen::failSafeSettings();
 
+    StatusScreen::loadBitmaps();
     GOTO_SCREEN(TouchCalibrationScreen);
     current_screen.forget();
     PUSH_SCREEN(StatusScreen);
   } else {
     if (!UIFlashStorage::is_valid()) {
       StatusScreen::loadBitmaps();
-      SpinnerDialogBox::show(F("Please wait..."));
+      SpinnerDialogBox::show(GET_TEXT_F(PLEASE_WAIT));
       UIFlashStorage::format_flash();
       SpinnerDialogBox::hide();
     }
@@ -82,6 +83,9 @@ void BootScreen::onIdle() {
       current_screen.forget();
       PUSH_SCREEN(StatusScreen);
       PUSH_SCREEN(BioConfirmHomeE);
+    #elif NUM_LANGUAGES > 1
+      StatusScreen::setStatusMessage(F(WELCOME_MSG));
+      GOTO_SCREEN(LanguageMenu);
     #else
       StatusScreen::setStatusMessage(F(WELCOME_MSG));
       GOTO_SCREEN(StatusScreen);

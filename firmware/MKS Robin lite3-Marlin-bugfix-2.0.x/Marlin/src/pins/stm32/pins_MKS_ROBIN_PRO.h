@@ -141,7 +141,7 @@
   // Software serial
   //
   #define X_SERIAL_TX_PIN  PF7
-  #define X_SERIAL_RX_PIN  PF
+  #define X_SERIAL_RX_PIN  PF8
 
   #define Y_SERIAL_TX_PIN  PF4
   #define Y_SERIAL_RX_PIN  PF3
@@ -195,18 +195,15 @@
   #define SDCARD_CONNECTION LCD
 #endif
 
-#define ONBOARD_SD_CS_PIN  P0_06   // Chip select for "System" SD card
-
-#if SD_CONNECTION_IS(LCD)
+#if SD_CONNECTION_IS(ONBOARD)
+    #define SD_DETECT_PIN      PD12
+#elif SD_CONNECTION_IS(LCD)
     #define ENABLE_SPI2
     #define SD_DETECT_PIN      PG3
     #define SCK_PIN            PB13
     #define MISO_PIN           PB14
     #define MOSI_PIN           PB15
     #define SS_PIN             PG6
-#elif SD_CONNECTION_IS(ONBOARD)
-    #define ONBOARD_SD_CS      PC11
-    #define SD_DETECT_PIN      PD12
 #elif SD_CONNECTION_IS(CUSTOM_CABLE)
   #error "No custom SD drive cable defined for this board."
 #endif
@@ -247,8 +244,8 @@
     #define LCD_RESET_PIN  -1
     #define DOGLCD_A0      PF12
     #define DOGLCD_CS      PF15
-    //#define DOGLCD_SCK     PB13
-    //#define DOGLCD_MOSI    PB15
+    #define DOGLCD_SCK     PB13
+    #define DOGLCD_MOSI    PB15
 
   #else // !MKS_MINI_12864
     #define LCD_PINS_D4    PF14

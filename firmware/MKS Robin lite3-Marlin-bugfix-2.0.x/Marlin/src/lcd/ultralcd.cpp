@@ -195,6 +195,10 @@ millis_t MarlinUI::next_button_update_ms; // = 0
     int8_t MarlinUI::encoderDirection = ENCODERBASE;
   #endif
 
+  #if ENABLED(TOUCH_BUTTONS)
+    uint8_t MarlinUI::repeat_delay;
+  #endif
+
   bool MarlinUI::lcd_clicked;
   float move_menu_scale;
 
@@ -658,10 +662,8 @@ void MarlinUI::quick_feedback(const bool clear_buttons/*=true*/) {
 
     if (manual_move_axis != (int8_t)NO_AXIS && ELAPSED(millis(), manual_move_start_time) && !planner.is_full()) {
 
+      const feedRate_t fr_mm_s = MMM_TO_MMS(manual_feedrate_mm_m[manual_move_axis]);
       #if IS_KINEMATIC
-
-        const float old_feedrate = feedrate_mm_s;
-        feedrate_mm_s = MMM_TO_MMS(manual_feedrate_mm_m[manual_move_axis]);
 
         #if EXTRUDERS > 1
           const int8_t old_extruder = active_extruder;
@@ -669,7 +671,7 @@ void MarlinUI::quick_feedback(const bool clear_buttons/*=true*/) {
         #endif
 
         // Set movement on a single axis
-        set_destination_from_current();
+        destination = current_position;
         destination[manual_move_axis] += manual_move_offset;
 
         // Reset for the next move
@@ -681,17 +683,16 @@ void MarlinUI::quick_feedback(const bool clear_buttons/*=true*/) {
         // previous invocation is being blocked. Modifications to manual_move_offset shouldn't be made while
         // processing_manual_move is true or the planner will get out of sync.
         processing_manual_move = true;
-        prepare_move_to_destination(); // will call set_current_from_destination()
+        prepare_internal_move_to_destination(fr_mm_s);  // will set current_position from destination
         processing_manual_move = false;
 
-        feedrate_mm_s = old_feedrate;
         #if EXTRUDERS > 1
           active_extruder = old_extruder;
         #endif
 
       #else
 
-        planner.buffer_line(current_position, MMM_TO_MMS(manual_feedrate_mm_m[manual_move_axis]), manual_move_axis == E_AXIS ? manual_move_e_index : active_extruder);
+        planner.buffer_line(current_position, fr_mm_s, manual_move_axis == E_AXIS ? manual_move_e_index : active_extruder);
         manual_move_axis = (int8_t)NO_AXIS;
 
       #endif
@@ -792,7 +793,7 @@ void MarlinUI::update() {
           if (touch_buttons & (EN_A | EN_B)) {          // A and/or B button?
             encoderDiff = (ENCODER_STEPS_PER_MENU_ITEM) * (ENCODER_PULSES_PER_STEP) * encoderDirection;
             if (touch_buttons & EN_A) encoderDiff *= -1;
-            next_button_update_ms = ms + 50;            // Assume the repeat delay
+            next_button_update_ms = ms + repeat_delay;  // Assume the repeat delay
             if (!wait_for_unclick && !arrow_pressed) {  // On click prepare for repeat
               next_button_update_ms += 250;             // Longer delay on first press
               arrow_pressed = true;                     // Mark arrow as pressed
@@ -838,7 +839,7 @@ void MarlinUI::update() {
 
       if (sd_status) {
         safe_delay(500); // Some boards need a delay to get settled
-        card.initsd();
+        card.mount();
         if (old_sd_status == 2)
           card.beginautostart();  // Initial boot
         else
@@ -1119,7 +1120,7 @@ void MarlinUI::update() {
        ADC_BUTTON_VALUE(ADC_BUTTONS_MIDDLE_R_PULLDOWN) + 100, 1 + BLEN_KEYPAD_MIDDLE }, // ENTER (1205 ... 1405)
   };
 
-  uint8_t get_ADC_keyValue(void) {
+  uint8_t get_ADC_keyValue() {
     if (thermalManager.ADCKey_count >= 16) {
       const uint16_t currentkpADCValue = thermalManager.current_ADCKey_raw << 2;
       thermalManager.current_ADCKey_raw = 1024;
@@ -1424,13 +1425,15 @@ void MarlinUI::update() {
     #endif
   }
 
+  #include "../Marlin.h"
   #include "../module/printcounter.h"
+
+  static const char print_paused[] PROGMEM = MSG_PRINT_PAUSED;
 
   /**
    * Reset the status message
    */
   void MarlinUI::reset_status() {
-    static const char paused[] PROGMEM = MSG_PRINT_PAUSED;
     static const char printing[] PROGMEM = MSG_PRINTING;
     static const char welcome[] PROGMEM = WELCOME_MSG;
     #if SERVICE_INTERVAL_1 > 0
@@ -1443,8 +1446,8 @@ void MarlinUI::update() {
       static const char service3[] PROGMEM = { "> " SERVICE_NAME_3 "!" };
     #endif
     PGM_P msg;
-    if (!IS_SD_PRINTING() && print_job_timer.isPaused())
-      msg = paused;
+    if (printingIsPaused())
+      msg = print_paused;
     #if ENABLED(SDSUPPORT)
       else if (IS_SD_PRINTING())
         return set_status(card.longest_filename(), true);
@@ -1480,6 +1483,9 @@ void MarlinUI::update() {
     #ifdef ACTION_ON_CANCEL
       host_action_cancel();
     #endif
+    #if ENABLED(HOST_PROMPT_SUPPORT)
+      host_prompt_open(PROMPT_INFO, PSTR("UI Aborted"), PSTR("Dismiss"));
+    #endif
     print_job_timer.stop();
     set_status_P(PSTR(MSG_PRINT_ABORTED));
     #if HAS_LCD_MENU
@@ -1504,7 +1510,7 @@ void MarlinUI::update() {
       host_prompt_open(PROMPT_PAUSE_RESUME, PSTR("UI Pause"), PSTR("Resume"));
     #endif
 
-    set_status_P(PSTR(MSG_PRINT_PAUSED));
+    set_status_P(print_paused); // MSG_PRINT_PAUSED
 
     #if ENABLED(PARK_HEAD_ON_PAUSE)
       #if HAS_SPI_LCD
@@ -1523,9 +1529,7 @@ void MarlinUI::update() {
     #if ENABLED(PARK_HEAD_ON_PAUSE)
       wait_for_heatup = wait_for_user = false;
     #endif
-    #if ENABLED(SDSUPPORT)
-      if (card.isPaused()) queue.inject_P(PSTR("M24"));
-    #endif
+    if (IS_SD_PAUSED()) queue.inject_P(PSTR("M24"));
     #ifdef ACTION_ON_RESUME
       host_action_resume();
     #endif
@@ -1542,7 +1546,7 @@ void MarlinUI::update() {
         uint8_t progress = 0;
       #endif
       #if ENABLED(SDSUPPORT)
-        if (IS_SD_PRINTING()) progress = card.percentDone();
+        if (!_PLIMIT(progress)) progress = card.percentDone();
       #endif
       return _PLIMIT(progress);
     }
