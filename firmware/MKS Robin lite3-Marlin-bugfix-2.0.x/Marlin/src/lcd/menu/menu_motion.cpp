@@ -29,12 +29,7 @@
 #if HAS_LCD_MENU
 
 #include "menu.h"
-
-#include "../lcdprint.h"
-
-#if HAS_GRAPHICAL_LCD
-  #include "../dogm/ultralcd_DOGM.h"
-#endif
+#include "menu_addon.h"
 
 #include "../../module/motion.h"
 
@@ -79,7 +74,7 @@ inline void manual_move_to_current(AxisEnum axis
 // "Motion" > "Move Axis" submenu
 //
 
-static void _lcd_move_xyz(PGM_P name, AxisEnum axis) {
+static void _lcd_move_xyz(PGM_P const name, const AxisEnum axis) {
   if (ui.use_click()) return ui.goto_previous_screen_no_defer();
   if (ui.encoderPosition && !ui.processing_manual_move) {
 
@@ -127,16 +122,16 @@ static void _lcd_move_xyz(PGM_P name, AxisEnum axis) {
     #endif
 
     // Get the new position
-    const float diff = float(int16_t(ui.encoderPosition)) * move_menu_scale;
+    const float diff = float(int32_t(ui.encoderPosition)) * move_menu_scale;
     #if IS_KINEMATIC
       manual_move_offset += diff;
-      if (int16_t(ui.encoderPosition) < 0)
+      if (int32_t(ui.encoderPosition) < 0)
         NOLESS(manual_move_offset, min - current_position[axis]);
       else
         NOMORE(manual_move_offset, max - current_position[axis]);
     #else
       current_position[axis] += diff;
-      if (int16_t(ui.encoderPosition) < 0)
+      if (int32_t(ui.encoderPosition) < 0)
         NOLESS(current_position[axis], min);
       else
         NOMORE(current_position[axis], max);
@@ -152,12 +147,12 @@ static void _lcd_move_xyz(PGM_P name, AxisEnum axis) {
         + manual_move_offset
       #endif
     , axis);
-    draw_edit_screen(name, move_menu_scale >= 0.1f ? ftostr41sign(pos) : ftostr43sign(pos));
+    MenuEditItemBase::draw_edit_screen(name, move_menu_scale >= 0.1f ? ftostr41sign(pos) : ftostr43sign(pos));
   }
 }
-void lcd_move_x() { _lcd_move_xyz(PSTR(MSG_MOVE_X), X_AXIS); }
-void lcd_move_y() { _lcd_move_xyz(PSTR(MSG_MOVE_Y), Y_AXIS); }
-void lcd_move_z() { _lcd_move_xyz(PSTR(MSG_MOVE_Z), Z_AXIS); }
+void lcd_move_x() { _lcd_move_xyz(GET_TEXT(MSG_MOVE_X), X_AXIS); }
+void lcd_move_y() { _lcd_move_xyz(GET_TEXT(MSG_MOVE_Y), Y_AXIS); }
+void lcd_move_z() { _lcd_move_xyz(GET_TEXT(MSG_MOVE_Z), Z_AXIS); }
 
 #if E_MANUAL
 
@@ -169,7 +164,7 @@ void lcd_move_z() { _lcd_move_xyz(PSTR(MSG_MOVE_Z), Z_AXIS); }
     if (ui.use_click()) return ui.goto_previous_screen_no_defer();
     if (ui.encoderPosition) {
       if (!ui.processing_manual_move) {
-        const float diff = float(int16_t(ui.encoderPosition)) * move_menu_scale;
+        const float diff = float(int32_t(ui.encoderPosition)) * move_menu_scale;
         #if IS_KINEMATIC
           manual_move_offset += diff;
         #else
@@ -185,37 +180,27 @@ void lcd_move_z() { _lcd_move_xyz(PSTR(MSG_MOVE_Z), Z_AXIS); }
       ui.encoderPosition = 0;
     }
     if (ui.should_draw()) {
-      PGM_P pos_label;
-      #if E_MANUAL == 1
-        pos_label = PSTR(MSG_MOVE_E);
-      #else
-        switch (eindex) {
-          default: pos_label = PSTR(MSG_MOVE_E LCD_STR_N0); break;
-          case 1: pos_label = PSTR(MSG_MOVE_E LCD_STR_N1); break;
-          #if E_MANUAL > 2
-            case 2: pos_label = PSTR(MSG_MOVE_E LCD_STR_N2); break;
-            #if E_MANUAL > 3
-              case 3: pos_label = PSTR(MSG_MOVE_E LCD_STR_N3); break;
-              #if E_MANUAL > 4
-                case 4: pos_label = PSTR(MSG_MOVE_E LCD_STR_N4); break;
-                #if E_MANUAL > 5
-                  case 5: pos_label = PSTR(MSG_MOVE_E LCD_STR_N5); break;
-                #endif // E_MANUAL > 5
-              #endif // E_MANUAL > 4
-            #endif // E_MANUAL > 3
-          #endif // E_MANUAL > 2
-        }
-      #endif // E_MANUAL > 1
-
-      draw_edit_screen(pos_label, ftostr41sign(current_position.e
-        #if IS_KINEMATIC
-          + manual_move_offset
-        #endif
-        #if ENABLED(MANUAL_E_MOVES_RELATIVE)
-          - manual_move_e_origin
-        #endif
-      ));
-    }
+      #if E_MANUAL > 1
+        MenuItemBase::init(eindex);
+      #endif
+      MenuEditItemBase::draw_edit_screen(
+        GET_TEXT(
+          #if E_MANUAL > 1
+            MSG_MOVE_EN
+          #else
+            MSG_MOVE_E
+          #endif
+        ),
+        ftostr41sign(current_position.e
+          #if IS_KINEMATIC
+            + manual_move_offset
+          #endif
+          #if ENABLED(MANUAL_E_MOVES_RELATIVE)
+            - manual_move_e_origin
+          #endif
+        )
+      );
+    } // should_draw
   }
 
 #endif // E_MANUAL
@@ -259,18 +244,19 @@ void _menu_move_distance(const AxisEnum axis, const screenFunc_t func, const int
   #endif
   {
     BACK_ITEM(MSG_MOVE_AXIS);
-    SUBMENU(MSG_MOVE_10MM, [](){ _goto_manual_move(10);    });
-    SUBMENU(MSG_MOVE_1MM,  [](){ _goto_manual_move( 1);    });
-    SUBMENU(MSG_MOVE_01MM, [](){ _goto_manual_move( 0.1f); });
+    SUBMENU(MSG_MOVE_10MM, []{ _goto_manual_move(10);    });
+    SUBMENU(MSG_MOVE_1MM,  []{ _goto_manual_move( 1);    });
+    SUBMENU(MSG_MOVE_01MM, []{ _goto_manual_move( 0.1f); });
     if (axis == Z_AXIS && (SHORT_MANUAL_Z_MOVE) > 0.0f && (SHORT_MANUAL_Z_MOVE) < 0.1f) {
-      SUBMENU("", []{ _goto_manual_move(float(SHORT_MANUAL_Z_MOVE)); });
-      MENU_ITEM_ADDON_START(1);
+      extern const char NUL_STR[];
+      SUBMENU_P(NUL_STR, []{ _goto_manual_move(float(SHORT_MANUAL_Z_MOVE)); });
+      MENU_ITEM_ADDON_START(0);
         char tmp[20], numstr[10];
         // Determine digits needed right of decimal
         const uint8_t digs = !UNEAR_ZERO((SHORT_MANUAL_Z_MOVE) * 1000 - int((SHORT_MANUAL_Z_MOVE) * 1000)) ? 4 :
                              !UNEAR_ZERO((SHORT_MANUAL_Z_MOVE) *  100 - int((SHORT_MANUAL_Z_MOVE) *  100)) ? 3 : 2;
-        sprintf_P(tmp, PSTR(MSG_MOVE_Z_DIST), dtostrf(SHORT_MANUAL_Z_MOVE, 1, digs, numstr));
-        LCDPRINT(tmp);
+        sprintf_P(tmp, GET_TEXT(MSG_MOVE_Z_DIST), dtostrf(SHORT_MANUAL_Z_MOVE, 1, digs, numstr));
+        lcd_put_u8str(tmp);
       MENU_ITEM_ADDON_END();
     }
   }
@@ -299,61 +285,61 @@ void menu_move() {
         true
       #endif
     ) {
-      SUBMENU(MSG_MOVE_X, [](){ _menu_move_distance(X_AXIS, lcd_move_x); });
-      SUBMENU(MSG_MOVE_Y, [](){ _menu_move_distance(Y_AXIS, lcd_move_y); });
+      SUBMENU(MSG_MOVE_X, []{ _menu_move_distance(X_AXIS, lcd_move_x); });
+      SUBMENU(MSG_MOVE_Y, []{ _menu_move_distance(Y_AXIS, lcd_move_y); });
     }
     #if ENABLED(DELTA)
       else
-        ACTION_ITEM(MSG_FREE_XY, [](){ line_to_z(delta_clip_start_height); ui.synchronize(); });
+        ACTION_ITEM(MSG_FREE_XY, []{ line_to_z(delta_clip_start_height); ui.synchronize(); });
     #endif
 
-    SUBMENU(MSG_MOVE_Z, [](){ _menu_move_distance(Z_AXIS, lcd_move_z); });
+    SUBMENU(MSG_MOVE_Z, []{ _menu_move_distance(Z_AXIS, lcd_move_z); });
   }
   else
-    GCODES_ITEM(MSG_AUTO_HOME, PSTR("G28"));
+    GCODES_ITEM(MSG_AUTO_HOME, G28_STR);
 
   #if ANY(SWITCHING_EXTRUDER, SWITCHING_NOZZLE, MAGNETIC_SWITCHING_TOOLHEAD)
 
     #if EXTRUDERS >= 4
       switch (active_extruder) {
-        case 0: GCODES_ITEM(MSG_SELECT " " LCD_STR_E1, PSTR("T1")); break;
-        case 1: GCODES_ITEM(MSG_SELECT " " LCD_STR_E0, PSTR("T0")); break;
-        case 2: GCODES_ITEM(MSG_SELECT " " LCD_STR_E3, PSTR("T3")); break;
-        case 3: GCODES_ITEM(MSG_SELECT " " LCD_STR_E2, PSTR("T2")); break;
+        case 0: GCODES_ITEM_N(1, MSG_SELECT_E, PSTR("T1")); break;
+        case 1: GCODES_ITEM_N(0, MSG_SELECT_E, PSTR("T0")); break;
+        case 2: GCODES_ITEM_N(3, MSG_SELECT_E, PSTR("T3")); break;
+        case 3: GCODES_ITEM_N(2, MSG_SELECT_E, PSTR("T2")); break;
         #if EXTRUDERS == 6
-          case 4: GCODES_ITEM(MSG_SELECT " " LCD_STR_E5, PSTR("T5")); break;
-          case 5: GCODES_ITEM(MSG_SELECT " " LCD_STR_E4, PSTR("T4")); break;
+          case 4: GCODES_ITEM_N(5, MSG_SELECT_E, PSTR("T5")); break;
+          case 5: GCODES_ITEM_N(4, MSG_SELECT_E, PSTR("T4")); break;
         #endif
       }
     #elif EXTRUDERS == 3
       if (active_extruder < 2) {
         if (active_extruder)
-          GCODES_ITEM(MSG_SELECT " " LCD_STR_E0, PSTR("T0"));
+          GCODES_ITEM_N(0, MSG_SELECT_E, PSTR("T0"));
         else
-          GCODES_ITEM(MSG_SELECT " " LCD_STR_E1, PSTR("T1"));
+          GCODES_ITEM_N(1, MSG_SELECT_E, PSTR("T1"));
       }
     #else
       if (active_extruder)
-        GCODES_ITEM(MSG_SELECT " " LCD_STR_E0, PSTR("T0"));
+        GCODES_ITEM_N(0, MSG_SELECT_E, PSTR("T0"));
       else
-        GCODES_ITEM(MSG_SELECT " " LCD_STR_E1, PSTR("T1"));
+        GCODES_ITEM_N(1, MSG_SELECT_E, PSTR("T1"));
     #endif
 
   #elif ENABLED(DUAL_X_CARRIAGE)
 
     if (active_extruder)
-      GCODES_ITEM(MSG_SELECT " " LCD_STR_E0, PSTR("T0"));
+      GCODES_ITEM_N(0, MSG_SELECT_E, PSTR("T0"));
     else
-      GCODES_ITEM(MSG_SELECT " " LCD_STR_E1, PSTR("T1"));
+      GCODES_ITEM_N(1, MSG_SELECT_E, PSTR("T1"));
 
   #endif
 
   #if E_MANUAL
 
     // The current extruder
-    SUBMENU(MSG_MOVE_E, [](){ _menu_move_distance(E_AXIS, [](){ lcd_move_e(); }, -1); });
+    SUBMENU(MSG_MOVE_E, []{ _menu_move_distance(E_AXIS, []{ lcd_move_e(); }, -1); });
 
-    #define SUBMENU_MOVE_E(N) SUBMENU(MSG_MOVE_E LCD_STR_N##N, [](){ _menu_move_distance(E_AXIS, [](){ lcd_move_e(N); }, N); });
+    #define SUBMENU_MOVE_E(N) SUBMENU_N(N, MSG_MOVE_EN, []{ _menu_move_distance(E_AXIS, []{ lcd_move_e(MenuItemBase::itemIndex); }, MenuItemBase::itemIndex); });
 
     #if EITHER(SWITCHING_EXTRUDER, SWITCHING_NOZZLE)
 
@@ -364,25 +350,10 @@ void menu_move() {
         SUBMENU_MOVE_E(2);
       #endif
 
-    #else
+    #elif E_MANUAL > 1
 
       // Independent extruders with one E-stepper per hotend
-      #if E_MANUAL > 1
-        SUBMENU_MOVE_E(0);
-        SUBMENU_MOVE_E(1);
-        #if E_MANUAL > 2
-          SUBMENU_MOVE_E(2);
-          #if E_MANUAL > 3
-            SUBMENU_MOVE_E(3);
-            #if E_MANUAL > 4
-              SUBMENU_MOVE_E(4);
-              #if E_MANUAL > 5
-                SUBMENU_MOVE_E(5);
-              #endif // E_MANUAL > 5
-            #endif // E_MANUAL > 4
-          #endif // E_MANUAL > 3
-        #endif // E_MANUAL > 2
-      #endif // E_MANUAL > 1
+      for (uint8_t n = 0; n < E_MANUAL; n++) SUBMENU_MOVE_E(n);
 
     #endif
 
@@ -416,7 +387,7 @@ void menu_motion() {
   //
   // Auto Home
   //
-  GCODES_ITEM(MSG_AUTO_HOME, PSTR("G28"));
+  GCODES_ITEM(MSG_AUTO_HOME, G28_STR);
   #if ENABLED(INDIVIDUAL_AXIS_HOMING_MENU)
     GCODES_ITEM(MSG_AUTO_HOME_X, PSTR("G28 X"));
     GCODES_ITEM(MSG_AUTO_HOME_Y, PSTR("G28 Y"));
@@ -452,7 +423,7 @@ void menu_motion() {
     }
     #if ENABLED(ENABLE_LEVELING_FADE_HEIGHT)
       editable.decimal = planner.z_fade_height;
-      EDIT_ITEM_FAST(float3, MSG_Z_FADE_HEIGHT, &editable.decimal, 0, 100, [](){ set_z_fade_height(editable.decimal); });
+      EDIT_ITEM_FAST(float3, MSG_Z_FADE_HEIGHT, &editable.decimal, 0, 100, []{ set_z_fade_height(editable.decimal); });
     #endif
 
   #endif

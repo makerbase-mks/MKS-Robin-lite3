@@ -28,6 +28,7 @@
 
 // All displays share the MarlinUI class
 #if HAS_DISPLAY
+  #include "../gcode/queue.h"
   #include "ultralcd.h"
   #include "fontutils.h"
   MarlinUI ui;
@@ -43,36 +44,33 @@
 #if HAS_SPI_LCD
   #if ENABLED(STATUS_MESSAGE_SCROLLING)
     uint8_t MarlinUI::status_scroll_offset; // = 0
-    #if LONG_FILENAME_LENGTH > CHARSIZE * 2 * (LCD_WIDTH)
-      #define MAX_MESSAGE_LENGTH LONG_FILENAME_LENGTH
-    #else
-      #define MAX_MESSAGE_LENGTH CHARSIZE * 2 * (LCD_WIDTH)
-    #endif
+    constexpr uint8_t MAX_MESSAGE_LENGTH = _MAX(LONG_FILENAME_LENGTH, MAX_LANG_CHARSIZE * 2 * (LCD_WIDTH));
   #else
-    #define MAX_MESSAGE_LENGTH CHARSIZE * (LCD_WIDTH)
+    constexpr uint8_t MAX_MESSAGE_LENGTH = MAX_LANG_CHARSIZE * (LCD_WIDTH);
   #endif
 #elif ENABLED(EXTENSIBLE_UI)
-  #define MAX_MESSAGE_LENGTH 63
+  constexpr uint8_t MAX_MESSAGE_LENGTH = 63;
 #endif
 
-#ifdef MAX_MESSAGE_LENGTH
+#if HAS_SPI_LCD || ENABLED(EXTENSIBLE_UI)
   uint8_t MarlinUI::alert_level; // = 0
   char MarlinUI::status_message[MAX_MESSAGE_LENGTH + 1];
 #endif
 
 #if ENABLED(LCD_SET_PROGRESS_MANUALLY)
-  uint8_t MarlinUI::progress_bar_percent; // = 0
+  MarlinUI::progress_t MarlinUI::progress_override; // = 0
+  #if BOTH(LCD_SET_PROGRESS_MANUALLY, USE_M73_REMAINING_TIME)
+    uint32_t MarlinUI::remaining_time;
+  #endif
 #endif
 
-#if HAS_BUZZER
-  #include "../libs/buzzer.h"
+#if ENABLED(PCA9632_BUZZER) || USE_BEEPER
+  #include "../libs/buzzer.h" // for BUZZ() macro
   #if ENABLED(PCA9632_BUZZER)
     #include "../feature/leds/pca9632.h"
   #endif
   void MarlinUI::buzz(const long duration, const uint16_t freq) {
-    #if ENABLED(LCD_USE_I2C_BUZZER)
-      lcd.buzz(duration, freq);
-    #elif ENABLED(PCA9632_BUZZER)
+    #if ENABLED(PCA9632_BUZZER)
       pca9632_buzz(duration, freq);
     #elif USE_BEEPER
       buzzer.tone(duration, freq);
@@ -93,7 +91,6 @@
 #include "../module/planner.h"
 #include "../module/printcounter.h"
 #include "../module/motion.h"
-#include "../gcode/queue.h"
 
 #include "../Marlin.h"
 
@@ -107,6 +104,10 @@
 
 #if HAS_TRINAMIC
   #include "../feature/tmc_util.h"
+#endif
+
+#if HAS_ADC_BUTTONS
+  #include "../module/thermistor/thermistors.h"
 #endif
 
 #if HAS_ENCODER_ACTION
@@ -141,7 +142,7 @@ millis_t MarlinUI::next_button_update_ms; // = 0
 
 // Encoder Handling
 #if HAS_ENCODER_ACTION
-  uint16_t MarlinUI::encoderPosition;
+  uint32_t MarlinUI::encoderPosition;
   volatile int8_t encoderDiff; // Updated in update_buttons, added to encoderPosition every LCD update
 #endif
 
@@ -181,6 +182,7 @@ millis_t MarlinUI::next_button_update_ms; // = 0
   #endif
 
   screenFunc_t MarlinUI::currentScreen; // Initialized in CTOR
+  bool MarlinUI::screen_changed;
 
   #if ENABLED(ENCODER_RATE_MULTIPLIER)
     bool MarlinUI::encoderRateMultiplierEnabled;
@@ -297,6 +299,10 @@ void MarlinUI::init() {
     #endif
     #if BUTTON_EXISTS(ENC)
       SET_INPUT_PULLUP(BTN_ENC);
+    #endif
+
+    #if BUTTON_EXISTS(BACK)
+      SET_INPUT_PULLUP(BTN_BACK);
     #endif
 
     #if BUTTON_EXISTS(UP)
@@ -464,7 +470,7 @@ bool MarlinUI::get_blink() {
 
         #endif // HAS_LCD_MENU
 
-        if (!homed && RRK(EN_KEYPAD_F1)) queue.inject_P(PSTR("G28"));
+        if (!homed && RRK(EN_KEYPAD_F1)) queue.inject_P(G28_STR);
         return true;
       }
 
@@ -519,7 +525,7 @@ void MarlinUI::status_screen() {
       if (expire_status_ms > 0) {
 
         // Expire the message if a job is active and the bar has ticks
-        if (get_progress() > 2 && !print_job_timer.isPaused()) {
+        if (get_progress_percent() > 2 && !print_job_timer.isPaused()) {
           if (ELAPSED(ms, expire_status_ms)) {
             status_message[0] = '\0';
             expire_status_ms = 0;
@@ -590,9 +596,12 @@ void MarlinUI::status_screen() {
   draw_status_screen();
 }
 
-void MarlinUI::kill_screen(PGM_P lcd_msg) {
+void MarlinUI::kill_screen(PGM_P lcd_error, PGM_P lcd_component) {
   init();
-  set_alert_status_P(lcd_msg);
+  status_printf_P(1, PSTR(S_FMT ": " S_FMT), lcd_error, lcd_component);
+  #if HAS_LCD_MENU
+    return_to_status();
+  #endif
 
   // RED ALERT. RED ALERT.
   #ifdef LED_BACKLIGHT_TIMEOUT
@@ -843,13 +852,13 @@ void MarlinUI::update() {
         if (old_sd_status == 2)
           card.beginautostart();  // Initial boot
         else
-          set_status_P(PSTR(MSG_MEDIA_INSERTED));
+          set_status_P(GET_TEXT(MSG_MEDIA_INSERTED));
       }
       #if PIN_EXISTS(SD_DETECT)
         else {
           card.release();
           if (old_sd_status != 2) {
-            set_status_P(PSTR(MSG_MEDIA_REMOVED));
+            set_status_P(GET_TEXT(MSG_MEDIA_REMOVED));
             #if HAS_LCD_MENU
               return_to_status();
             #endif
@@ -1028,7 +1037,8 @@ void MarlinUI::update() {
           // If still drawing and there's another page, update max-time and return now.
           // The nextPage will already be set up on the next call.
           if (drawing_screen && (drawing_screen = u8g.nextPage())) {
-            NOLESS(max_display_update_time, millis() - ms);
+            if (on_status_screen())
+              NOLESS(max_display_update_time, millis() - ms);
             return;
           }
         }
@@ -1045,7 +1055,8 @@ void MarlinUI::update() {
 
       // Keeping track of the longest time for an individual LCD update.
       // Used to do screen throttling when the planner starts to fill up.
-      NOLESS(max_display_update_time, millis() - ms);
+      if (on_status_screen())
+        NOLESS(max_display_update_time, millis() - ms);
     }
 
     #if HAS_LCD_MENU && LCD_TIMEOUT_TO_STATUS
@@ -1101,31 +1112,33 @@ void MarlinUI::update() {
   #endif
 
   // Calculate the ADC value for the voltage divider with specified pull-down resistor value
-  #define ADC_BUTTON_VALUE(r)  (int(4096.0 * (ADC_BUTTONS_VALUE_SCALE) * r / (r + ADC_BUTTONS_R_PULLUP)))
+  #define ADC_BUTTON_VALUE(r)  int(HAL_ADC_RANGE * (ADC_BUTTONS_VALUE_SCALE) * r / (r + ADC_BUTTONS_R_PULLUP))
 
+  static constexpr uint16_t adc_button_tolerance = HAL_ADC_RANGE *   25 / 1024,
+                                adc_other_button = HAL_ADC_RANGE * 1000 / 1024;
   static const _stADCKeypadTable_ stADCKeyTable[] PROGMEM = {
     // VALUE_MIN, VALUE_MAX, KEY
-    { 4000, 4096, 1 + BLEN_KEYPAD_F1     }, // F1
-    { 4000, 4096, 1 + BLEN_KEYPAD_F2     }, // F2
-    { 4000, 4096, 1 + BLEN_KEYPAD_F3     }, // F3
-    {  ADC_BUTTON_VALUE(ADC_BUTTONS_LEFT_R_PULLDOWN)   - 100,
-       ADC_BUTTON_VALUE(ADC_BUTTONS_LEFT_R_PULLDOWN)   + 100, 1 + BLEN_KEYPAD_LEFT   }, // LEFT  ( 272 ...  472)
-    {  ADC_BUTTON_VALUE(ADC_BUTTONS_RIGHT_R_PULLDOWN)  - 100,
-       ADC_BUTTON_VALUE(ADC_BUTTONS_RIGHT_R_PULLDOWN)  + 100, 1 + BLEN_KEYPAD_RIGHT  }, // RIGHT (1948 ... 2148)
-    {  ADC_BUTTON_VALUE(ADC_BUTTONS_UP_R_PULLDOWN)     - 100,
-       ADC_BUTTON_VALUE(ADC_BUTTONS_UP_R_PULLDOWN)     + 100, 1 + BLEN_KEYPAD_UP     }, // UP    ( 618 ...  818)
-    {  ADC_BUTTON_VALUE(ADC_BUTTONS_DOWN_R_PULLDOWN)   - 100,
-       ADC_BUTTON_VALUE(ADC_BUTTONS_DOWN_R_PULLDOWN)   + 100, 1 + BLEN_KEYPAD_DOWN   }, // DOWN  (2686 ... 2886)
-    {  ADC_BUTTON_VALUE(ADC_BUTTONS_MIDDLE_R_PULLDOWN) - 100,
-       ADC_BUTTON_VALUE(ADC_BUTTONS_MIDDLE_R_PULLDOWN) + 100, 1 + BLEN_KEYPAD_MIDDLE }, // ENTER (1205 ... 1405)
+    { adc_other_button, HAL_ADC_RANGE, 1 + BLEN_KEYPAD_F1     }, // F1
+    { adc_other_button, HAL_ADC_RANGE, 1 + BLEN_KEYPAD_F2     }, // F2
+    { adc_other_button, HAL_ADC_RANGE, 1 + BLEN_KEYPAD_F3     }, // F3
+    {  ADC_BUTTON_VALUE(ADC_BUTTONS_LEFT_R_PULLDOWN)   - adc_button_tolerance,
+       ADC_BUTTON_VALUE(ADC_BUTTONS_LEFT_R_PULLDOWN)   + adc_button_tolerance, 1 + BLEN_KEYPAD_LEFT   }, // LEFT  ( 272 ...  472)
+    {  ADC_BUTTON_VALUE(ADC_BUTTONS_RIGHT_R_PULLDOWN)  - adc_button_tolerance,
+       ADC_BUTTON_VALUE(ADC_BUTTONS_RIGHT_R_PULLDOWN)  + adc_button_tolerance, 1 + BLEN_KEYPAD_RIGHT  }, // RIGHT (1948 ... 2148)
+    {  ADC_BUTTON_VALUE(ADC_BUTTONS_UP_R_PULLDOWN)     - adc_button_tolerance,
+       ADC_BUTTON_VALUE(ADC_BUTTONS_UP_R_PULLDOWN)     + adc_button_tolerance, 1 + BLEN_KEYPAD_UP     }, // UP    ( 618 ...  818)
+    {  ADC_BUTTON_VALUE(ADC_BUTTONS_DOWN_R_PULLDOWN)   - adc_button_tolerance,
+       ADC_BUTTON_VALUE(ADC_BUTTONS_DOWN_R_PULLDOWN)   + adc_button_tolerance, 1 + BLEN_KEYPAD_DOWN   }, // DOWN  (2686 ... 2886)
+    {  ADC_BUTTON_VALUE(ADC_BUTTONS_MIDDLE_R_PULLDOWN) - adc_button_tolerance,
+       ADC_BUTTON_VALUE(ADC_BUTTONS_MIDDLE_R_PULLDOWN) + adc_button_tolerance, 1 + BLEN_KEYPAD_MIDDLE }, // ENTER (1205 ... 1405)
   };
 
   uint8_t get_ADC_keyValue() {
     if (thermalManager.ADCKey_count >= 16) {
-      const uint16_t currentkpADCValue = thermalManager.current_ADCKey_raw << 2;
-      thermalManager.current_ADCKey_raw = 1024;
+      const uint16_t currentkpADCValue = thermalManager.current_ADCKey_raw;
+      thermalManager.current_ADCKey_raw = HAL_ADC_RANGE;
       thermalManager.ADCKey_count = 0;
-      if (currentkpADCValue < 4000)
+      if (currentkpADCValue < adc_other_button)
         for (uint8_t i = 0; i < ADC_KEY_NUM; i++) {
           const uint16_t lo = pgm_read_word(&stADCKeyTable[i].ADCKeyValueMin),
                          hi = pgm_read_word(&stADCKeyTable[i].ADCKeyValueMax);
@@ -1230,11 +1243,11 @@ void MarlinUI::update() {
 
         #endif // UP || DWN || LFT || RT
 
-        buttons = newbutton
+        buttons = (newbutton
           #if HAS_SLOW_BUTTONS
             | slow_buttons
           #endif
-        ;
+        );
 
       #elif HAS_ADC_BUTTONS
 
@@ -1251,13 +1264,13 @@ void MarlinUI::update() {
 
       #if HAS_SHIFT_ENCODER
 
-        GET_SHIFT_BUTTON_STATES(
+        GET_SHIFT_BUTTON_STATES((
           #if ENABLED(REPRAPWORLD_KEYPAD)
             keypad_buttons
           #else
             buttons
           #endif
-        );
+        ));
 
       #endif
 
@@ -1349,8 +1362,6 @@ void MarlinUI::update() {
     #if ENABLED(EXTENSIBLE_UI)
       ExtUI::onStatusChanged(status_message);
     #endif
-
-    refresh();
   }
 
   bool MarlinUI::has_status() { return (status_message[0] != '\0'); }
@@ -1428,14 +1439,14 @@ void MarlinUI::update() {
   #include "../Marlin.h"
   #include "../module/printcounter.h"
 
-  static const char print_paused[] PROGMEM = MSG_PRINT_PAUSED;
+  PGM_P print_paused = GET_TEXT(MSG_PRINT_PAUSED);
 
   /**
    * Reset the status message
    */
   void MarlinUI::reset_status() {
-    static const char printing[] PROGMEM = MSG_PRINTING;
-    static const char welcome[] PROGMEM = WELCOME_MSG;
+    PGM_P printing = GET_TEXT(MSG_PRINTING);
+    PGM_P welcome  = GET_TEXT(WELCOME_MSG);
     #if SERVICE_INTERVAL_1 > 0
       static const char service1[] PROGMEM = { "> " SERVICE_NAME_1 "!" };
     #endif
@@ -1487,7 +1498,7 @@ void MarlinUI::update() {
       host_prompt_open(PROMPT_INFO, PSTR("UI Aborted"), PSTR("Dismiss"));
     #endif
     print_job_timer.stop();
-    set_status_P(PSTR(MSG_PRINT_ABORTED));
+    set_status_P(GET_TEXT(MSG_PRINT_ABORTED));
     #if HAS_LCD_MENU
       return_to_status();
     #endif
@@ -1499,7 +1510,7 @@ void MarlinUI::update() {
 
   void MarlinUI::pause_print() {
     #if HAS_LCD_MENU
-      synchronize(PSTR(MSG_PAUSE_PRINT));
+      synchronize(GET_TEXT(MSG_PAUSE_PRINT));
     #endif
 
     #if ENABLED(POWER_LOSS_RECOVERY)
@@ -1510,7 +1521,7 @@ void MarlinUI::update() {
       host_prompt_open(PROMPT_PAUSE_RESUME, PSTR("UI Pause"), PSTR("Resume"));
     #endif
 
-    set_status_P(print_paused); // MSG_PRINT_PAUSED
+    set_status_P(print_paused);
 
     #if ENABLED(PARK_HEAD_ON_PAUSE)
       #if HAS_SPI_LCD
@@ -1529,7 +1540,7 @@ void MarlinUI::update() {
     #if ENABLED(PARK_HEAD_ON_PAUSE)
       wait_for_heatup = wait_for_user = false;
     #endif
-    if (IS_SD_PAUSED()) queue.inject_P(PSTR("M24"));
+    if (IS_SD_PAUSED()) queue.inject_P(M24_STR);
     #ifdef ACTION_ON_RESUME
       host_action_resume();
     #endif
@@ -1537,19 +1548,24 @@ void MarlinUI::update() {
   }
 
   #if HAS_PRINT_PROGRESS
-    uint8_t MarlinUI::get_progress() {
+
+    MarlinUI::progress_t MarlinUI::_get_progress() {
       #if ENABLED(LCD_SET_PROGRESS_MANUALLY)
-        uint8_t &progress = progress_bar_percent;
-        #define _PLIMIT(P) ((P) & 0x7F)
+        const progress_t p = progress_override & PROGRESS_MASK;
       #else
-        #define _PLIMIT(P) P
-        uint8_t progress = 0;
+        constexpr progress_t p = 0;
       #endif
-      #if ENABLED(SDSUPPORT)
-        if (!_PLIMIT(progress)) progress = card.percentDone();
-      #endif
-      return _PLIMIT(progress);
+      return (p
+        #if ENABLED(SDSUPPORT)
+          #if HAS_PRINT_PROGRESS_PERMYRIAD
+            ?: card.permyriadDone()
+          #else
+            ?: card.percentDone()
+          #endif
+        #endif
+      );
     }
+
   #endif
 
 #endif // HAS_DISPLAY

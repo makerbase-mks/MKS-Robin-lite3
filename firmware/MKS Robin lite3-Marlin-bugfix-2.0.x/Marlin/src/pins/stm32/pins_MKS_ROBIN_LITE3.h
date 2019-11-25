@@ -107,8 +107,8 @@
     #define LCD_RESET_PIN  -1
     #define DOGLCD_A0      PC4
     #define DOGLCD_CS      PA7
-    //#define DOGLCD_SCK     PB13
-    //#define DOGLCD_MOSI    PB15
+    #define DOGLCD_SCK     PB13
+    #define DOGLCD_MOSI    PB15
 
   #else // !MKS_MINI_12864
     #define LCD_PINS_D4    PA6

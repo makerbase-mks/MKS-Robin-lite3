@@ -22,16 +22,16 @@
 #pragma once
 
 /**
- * MKS Robin (STM32F130ZET6) board pin assignments
+ * MKS Robin nano (STM32F130ZET6) board pin assignments
  */
 
 #ifndef __STM32F1__
   #error "Oops! Select an STM32F1 board in 'Tools > Board.'"
 #elif HOTENDS > 3 || E_STEPPERS > 3
-  #error "MKS Robin Pro supports up to 3 hotends / E-steppers. Comment out this line to continue."
+  #error "MKS Robin pro supports up to 3 hotends / E-steppers. Comment out this line to continue."
 #endif
 
-#define BOARD_INFO_NAME "MKS Robin Pro"
+#define BOARD_INFO_NAME "MKS Robin pro"
 
 //
 // Release PB4 (Y_ENABLE_PIN) from JTAG NRST role
@@ -41,8 +41,8 @@
 //
 // Note: MKS Robin board is using SPI2 interface.
 //
-#define SPI_MODULE 2
-
+//#define SPI_MODULE 2
+#define ENABLE_SPI2
 //
 // Servos
 //
@@ -102,7 +102,6 @@
 #ifndef E2_CS_PIN
   #define E2_CS_PIN        PG9
 #endif
-
 //
 // Software SPI pins for TMC2130 stepper drivers
 //
@@ -195,15 +194,16 @@
   #define SDCARD_CONNECTION LCD
 #endif
 
-#if SD_CONNECTION_IS(ONBOARD)
-    #define SD_DETECT_PIN      PD12
-#elif SD_CONNECTION_IS(LCD)
+#if SD_CONNECTION_IS(LCD)
     #define ENABLE_SPI2
     #define SD_DETECT_PIN      PG3
     #define SCK_PIN            PB13
     #define MISO_PIN           PB14
     #define MOSI_PIN           PB15
     #define SS_PIN             PG6
+#elif SD_CONNECTION_IS(ONBOARD)
+    #define SDIO_SUPPORT
+    #define SD_DETECT_PIN      PD12
 #elif SD_CONNECTION_IS(CUSTOM_CABLE)
   #error "No custom SD drive cable defined for this board."
 #endif
