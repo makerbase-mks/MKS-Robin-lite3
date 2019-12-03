@@ -525,6 +525,8 @@
   #include "stm32/pins_LERDGE_K.h"              // STM32F4                                env:STM32F4
 #elif MB(LERDGE_X)
   #include "stm32/pins_LERDGE_X.h"              // STM32F4                                env:STM32F4
+#elif MB(MKS_RUMBA32)
+  #include "stm32/pins_MKS_RUMBA32.h"           // STM32F4                                env:STM32F446VET6
 
 //
 // ARM Cortex M7
